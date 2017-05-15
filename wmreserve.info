@@ -1,0 +1,5 @@
+name = WM Reserve
+description = Custom product reserve functionality
+version = 7.x-1
+core = 7.x
+package = custom

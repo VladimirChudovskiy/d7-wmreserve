@@ -1,0 +1,152 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function wmreserve_menu(){
+    $items['wm-get-reserve-btn-attrs/%/%/%'] = [
+        'access callback'   => TRUE,
+        'page callback'     => 'get_reserve_btn_attrs',
+        'delivery callback' => 'drupal_json_output',
+        'page arguments' => array(1,2,3),
+    ];
+    $items['wm-add-to-reserve/%/%/%'] = [
+        'access callback'   => TRUE,
+        'page callback'     => 'add_to_reserve',
+        'delivery callback' => 'drupal_json_output',
+        'page arguments' => array(1,2,3),
+    ];
+    $items['wm-remove-from-reserve/%/%/%'] = [
+        'access callback'   => TRUE,
+        'page callback'     => 'remove_from_reserve',
+        'delivery callback' => 'drupal_json_output',
+        'page arguments' => array(1,2,3),
+    ];
+
+    $items['admin/settings/wmreserve'] = array(
+        'title' => t('Reserve page settings'),
+        'description' => 'The maximum reserve count.',
+        'page callback' => 'drupal_get_form',
+        'page arguments' => array('wmreserve_admin'),
+        'access arguments' => array('administer users'),
+        'type' => MENU_NORMAL_ITEM,
+    );
+
+    return $items;
+}
+
+function wmreserve_admin(){
+    $form = array();
+
+    $form['max_reserve_count'] = array(
+        '#type' => 'textfield',
+        '#title' => t('The maximum reserve count.'),
+        '#default_value' => variable_get('max_reserve_count', 1),
+        '#size' => 2,
+        '#maxlength' => 2,
+        '#description' => t("The maximum reserve count."),
+        '#required' => TRUE,
+    );
+
+    return system_settings_form($form);
+}
+
+function wmreserve_cron(){
+    if( date('G', time()) == 0) {
+        remove_all_reserve_node();
+    }
+}
+
+
+function get_reserve_btn_attrs($user, $product, $line_item){
+    // Check line_item is reserved
+    if(is_line_item_reserved($line_item)){
+        return [
+            'status' => 'Is reserved',
+            'class' => 'wm-reserved',
+            'btn_text' => t('Remove from reserve')
+        ];
+    }else{
+        if(get_count_reserved_node($user, $product) >= variable_get('max_reserve_count', 1)){
+            return [
+                'status' => 'Is unreserved',
+                'class' => 'wm-limit-reserved',
+                'btn_text' => t('Maximum time reserved today')
+            ];
+        }else{
+            return [
+                'status' => 'Is unreserved',
+                'class' => 'wm-unreserved',
+                'btn_text' => t('Add to reserve')
+            ];
+        }
+    }
+}
+
+function add_to_reserve($user, $product, $line_item){
+    drupal_set_message(t('Add to reserve event user='.$user.' and product='.$product));
+    // Set line_item reserved
+    $line_item_object = commerce_line_item_load($line_item);
+    $line_item_object->field_reserve['und'][0]['value'] = 1;
+    commerce_line_item_save($line_item_object);
+
+    // Add node reserve
+    $node = new stdClass();
+    $node->title = "Reserve user_id=" . $user . " and product_id=" . $product;
+    $node->type = "reserve";
+    $node->uid = 1; //$user->uid;
+    $node->status = 1;
+    $node->field_user_id['und'][]['value'] = $user;
+    $node->field_product_id['und'][]['value'] = $product;
+    $node = node_submit($node);
+    node_save($node);
+
+    return get_reserve_btn_attrs($user, $product, $line_item);
+}
+
+function remove_from_reserve($user, $product, $line_item){
+    // Set line_item not reserved
+    $line_item_object = commerce_line_item_load($line_item);
+    $line_item_object->field_reserve['und'][0]['value'] = 0;
+    commerce_line_item_save($line_item_object);
+
+    return get_reserve_btn_attrs($user, $product, $line_item);
+}
+
+
+function is_line_item_reserved($id){
+    $line_item = commerce_line_item_load($id);
+    if($line_item->field_reserve['und'][0]['value'] == 1){
+        return true;
+    }else{
+        return false;
+    }
+}
+
+
+function remove_all_reserve_node(){
+    $results = db_select('node', 'n')
+        ->fields('n', array('nid'))
+        ->condition('type', 'reserve')
+        ->execute();
+    foreach ($results as $result) {
+        $nids[] = $result->nid;
+    }
+    if (!empty($nids)) {
+        node_delete_multiple($nids);
+        drupal_set_message(t('%count nodes has been deleted.', array('%count' => count($nids))));
+    }
+}
+
+function get_count_reserved_node($user, $product){
+    $query = new EntityFieldQuery();
+    $query->entityCondition('entity_type', 'node')
+        ->entityCondition('bundle', 'reserve')
+        //->propertyCondition('status', NODE_PUBLISHED)
+        ->fieldCondition('field_product_id', 'value', $product, '=')
+        ->fieldCondition('field_user_id', 'value', $user, '=');
+
+    $count = $query->count()->execute();
+
+    return $count;
+}
